@@ -104,6 +104,25 @@ for (let i = 0; i < 20; i++) {
     gameState.coins.push(...chunk.coins);
 }
 
+// 衝突判定ヘルパー関数
+function checkCollision(rect1, rect2) {
+    return rect1.x < rect2.x + rect2.width &&
+           rect1.x + rect1.width > rect2.x &&
+           rect1.y < rect2.y + rect2.height &&
+           rect1.y + rect1.height > rect2.y;
+}
+
+// より精密な衝突判定（前の位置も考慮）
+function checkCollisionWithPrevious(current, previous, target) {
+    return {
+        colliding: checkCollision(current, target),
+        fromTop: previous.y + previous.height <= target.y && current.vy > 0,
+        fromBottom: previous.y >= target.y + target.height && current.vy < 0,
+        fromLeft: previous.x + previous.width <= target.x && current.vx > 0,
+        fromRight: previous.x >= target.x + target.width && current.vx < 0
+    };
+}
+
 // プレイヤークラス
 class Player {
     constructor(id, name) {
@@ -119,9 +138,14 @@ class Player {
         this.score = 0;
         this.color = `hsl(${Math.random() * 360}, 70%, 50%)`;
         this.health = 100;
+        this.invulnerable = 0; // 無敵時間
     }
 
     update() {
+        // 前のフレームの位置を保存
+        const prevX = this.x;
+        const prevY = this.y;
+
         // 重力適用
         this.vy += 0.5;
         
@@ -133,40 +157,90 @@ class Player {
         this.vx *= 0.85;
 
         // 地面との衝突
-        if (this.y > 500) {
-            this.y = 500;
+        const groundLevel = 500;
+        if (this.y + this.height > groundLevel) {
+            this.y = groundLevel - this.height;
             this.vy = 0;
             this.onGround = true;
         }
 
         // プラットフォームとの衝突チェック
-        this.onGround = false;
+        this.onGround = this.y + this.height >= groundLevel - 1; // 地面にいるかチェック
+        
         for (const platform of gameState.platforms) {
-            if (this.x < platform.x + platform.width &&
-                this.x + this.width > platform.x &&
-                this.y < platform.y + platform.height &&
-                this.y + this.height > platform.y) {
-                
-                if (this.vy > 0 && this.y < platform.y) {
+            const collision = checkCollisionWithPrevious(
+                {x: this.x, y: this.y, width: this.width, height: this.height, vx: this.vx, vy: this.vy},
+                {x: prevX, y: prevY, width: this.width, height: this.height},
+                platform
+            );
+            
+            if (collision.colliding) {
+                if (collision.fromTop && this.vy > 0) {
+                    // 上から着地
                     this.y = platform.y - this.height;
                     this.vy = 0;
                     this.onGround = true;
+                } else if (collision.fromBottom && this.vy < 0) {
+                    // 下から衝突
+                    this.y = platform.y + platform.height;
+                    this.vy = 0;
+                } else if (collision.fromLeft && this.vx > 0) {
+                    // 左から衝突
+                    this.x = platform.x - this.width;
+                    this.vx = 0;
+                } else if (collision.fromRight && this.vx < 0) {
+                    // 右から衝突
+                    this.x = platform.x + platform.width;
+                    this.vx = 0;
                 }
             }
         }
 
-        // 障害物との衝突チェック
-        for (const obstacle of gameState.obstacles) {
-            if (this.x < obstacle.x + obstacle.width &&
-                this.x + this.width > obstacle.x &&
-                this.y < obstacle.y + obstacle.height &&
-                this.y + this.height > obstacle.y) {
-                
-                if (obstacle.type === 'spike' || obstacle.type === 'hole') {
-                    this.health -= 1;
+        // 障害物との衝突チェック（無敵時間チェック追加）
+        if (!this.invulnerable || Date.now() > this.invulnerable) {
+            for (const obstacle of gameState.obstacles) {
+                if (this.x < obstacle.x + obstacle.width &&
+                    this.x + this.width > obstacle.x &&
+                    this.y < obstacle.y + obstacle.height &&
+                    this.y + this.height > obstacle.y) {
+                    
+                    // 障害物の種類によって処理を分ける
+                    switch(obstacle.type) {
+                        case 'spike':
+                            this.health -= 2;
+                            // ノックバック効果
+                            this.vx = -5;
+                            this.vy = -8;
+                            break;
+                        case 'moving':
+                            this.health -= 1;
+                            // 動く障害物の移動方向と逆にノックバック
+                            this.vx = obstacle.moveSpeed > 0 ? -8 : 8;
+                            this.vy = -5;
+                            break;
+                        case 'hole':
+                            this.health -= 5;
+                            this.vy = 2; // 穴に落とす
+                            break;
+                        case 'wall':
+                            // 壁の場合は位置を修正
+                            if (this.vx > 0) {
+                                this.x = obstacle.x - this.width;
+                            } else {
+                                this.x = obstacle.x + obstacle.width;
+                            }
+                            this.vx = 0;
+                            break;
+                    }
+                    
+                    // 体力が0以下になったらリスポーン
                     if (this.health <= 0) {
                         this.respawn();
                     }
+                    
+                    // 連続ダメージを防ぐため、短時間無敵状態にする
+                    this.invulnerable = Date.now() + 1000; // 1秒間無敵
+                    break; // 1つの障害物との衝突のみ処理
                 }
             }
         }
@@ -202,6 +276,7 @@ class Player {
         this.vx = 0;
         this.vy = 0;
         this.health = 100;
+        this.invulnerable = Date.now() + 2000; // リスポーン後2秒間無敵
     }
 
     jump() {
