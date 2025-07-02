@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>アスレチックオンラインゲーム</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(to bottom, #87CEEB, #98FB98);
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #gameCanvas {
+            background: linear-gradient(to bottom, #87CEEB 0%, #98FB98 60%, #8B4513 100%);
+            cursor: crosshair;
+        }
+
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+            color: white;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+        }
+
+        #leaderboard {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 100;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            min-width: 200px;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        #loginScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        #loginForm {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+
+        #loginForm input {
+            padding: 10px;
+            margin: 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+
+        #loginForm button {
+            padding: 12px 24px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        #loginForm button:hover {
+            background: #45a049;
+        }
+
+        .player-info {
+            margin: 5px 0;
+            padding: 5px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 5px;
+        }
+
+        #mobileControls {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            display: none;
+            justify-content: space-around;
+            z-index: 100;
+        }
+
+        .mobile-btn {
+            width: 60px;
+            height: 60px;
+            background: rgba(255,255,255,0.8);
+            border: none;
+            border-radius: 50%;
+            font-size: 20px;
+            cursor: pointer;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            user-select: none;
+        }
+
+        .mobile-btn:active {
+            transform: scale(0.95);
+        }
+
+        @media (max-width: 768px) {
+            #mobileControls {
+                display: flex;
+            }
+            #controls {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        
+        <div id="ui">
+            <h3>アスレチックアドベンチャー</h3>
+            <div id="playerStats">
+                <div>スコア: <span id="score">0</span></div>
+                <div>体力: <span id="health">100</span></div>
+                <div>位置: <span id="position">0m</span></div>
+            </div>
+        </div>
+
+        <div id="leaderboard">
+            <h4>🏆 リーダーボード</h4>
+            <div id="playerList"></div>
+        </div>
+
+        <div id="controls">
+            <div>操作方法:</div>
+            <div>← → 移動 | ↑ ジャンプ | WASD でも操作可能</div>
+        </div>
+
+        <div id="mobileControls">
+            <button class="mobile-btn" id="leftBtn">←</button>
+            <button class="mobile-btn" id="jumpBtn">↑</button>
+            <button class="mobile-btn" id="rightBtn">→</button>
+        </div>
+
+        <div id="loginScreen">
+            <div id="loginForm">
+                <h2>🏃‍♂️ アスレチックゲームへようこそ！</h2>
+                <p>プレイヤー名を入力してゲームに参加しよう</p>
+                <input type="text" id="playerName" placeholder="プレイヤー名" maxlength="20">
+                <br>
+                <button onclick="joinGame()">ゲーム開始</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const socket = io();
+
+        // キャンバスサイズ設定
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // ゲーム状態
+        let gameState = {
+            players: {},
+            platforms: [],
+            obstacles: [],
+            coins: [],
+            camera: { x: 0, y: 0 }
+        };
+
+        let myPlayerId = null;
+        let keys = {};
+
+        // ゲーム参加
+        function joinGame() {
+            const playerName = document.getElementById('playerName').value.trim() || 'Anonymous';
+            socket.emit('join', playerName);
+            document.getElementById('loginScreen').style.display = 'none';
+            myPlayerId = socket.id;
+        }
+
+        // キーボード制御
+        document.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            
+            switch(e.key.toLowerCase()) {
+                case 'arrowleft':
+                case 'a':
+                    socket.emit('move', 'left');
+                    break;
+                case 'arrowright':
+                case 'd':
+                    socket.emit('move', 'right');
+                    break;
+                case 'arrowup':
+                case 'w':
+                case ' ':
+                    socket.emit('move', 'jump');
+                    e.preventDefault();
+                    break;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+
+        // モバイル制御
+        document.getElementById('leftBtn').addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            socket.emit('move', 'left');
+        });
+
+        document.getElementById('rightBtn').addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            socket.emit('move', 'right');
+        });
+
+        document.getElementById('jumpBtn').addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            socket.emit('move', 'jump');
+        });
+
+        // 継続移動（キーが押され続けている間）
+        setInterval(() => {
+            if (keys['arrowleft'] || keys['a']) {
+                socket.emit('move', 'left');
+            }
+            if (keys['arrowright'] || keys['d']) {
+                socket.emit('move', 'right');
+            }
+        }, 16);
+
+        // Socket.IO イベント
+        socket.on('gameState', (state) => {
+            gameState.players = state.players;
+            gameState.platforms = state.platforms;
+            gameState.obstacles = state.obstacles;
+            gameState.coins = state.coins;
+        });
+
+        socket.on('update', (state) => {
+            gameState.players = state.players;
+            gameState.obstacles = state.obstacles;
+            gameState.coins = state.coins;
+            updateUI();
+        });
+
+        socket.on('playerJoined', (player) => {
+            gameState.players[player.id] = player;
+        });
+
+        socket.on('playerLeft', (playerId) => {
+            delete gameState.players[playerId];
+        });
+
+        // UI更新
+        function updateUI() {
+            const myPlayer = gameState.players[socket.id];
+            if (myPlayer) {
+                document.getElementById('score').textContent = myPlayer.score;
+                document.getElementById('health').textContent = myPlayer.health;
+                document.getElementById('position').textContent = Math.floor(myPlayer.x / 10) + 'm';
+            }
+
+            // リーダーボード更新
+            const playerList = document.getElementById('playerList');
+            const sortedPlayers = Object.values(gameState.players)
+                .sort((a, b) => b.score - a.score);
+
+            playerList.innerHTML = '';
+            sortedPlayers.forEach((player, index) => {
+                const div = document.createElement('div');
+                div.className = 'player-info';
+                div.innerHTML = `
+                    ${index + 1}. ${player.name}<br>
+                    <small>スコア: ${player.score} | 距離: ${Math.floor(player.x / 10)}m</small>
+                `;
+                if (player.id === socket.id) {
+                    div.style.background = 'rgba(255,255,0,0.3)';
+                }
+                playerList.appendChild(div);
+            });
+        }
+
+        // カメラ更新
+        function updateCamera() {
+            const myPlayer = gameState.players[socket.id];
+            if (myPlayer) {
+                gameState.camera.x = myPlayer.x - canvas.width / 2;
+                gameState.camera.y = myPlayer.y - canvas.height / 2;
+            }
+        }
+
+        // 描画関数
+        function drawRect(x, y, width, height, color) {
+            ctx.fillStyle = color;
+            ctx.fillRect(x - gameState.camera.x, y - gameState.camera.y, width, height);
+        }
+
+        function drawCircle(x, y, radius, color) {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(x - gameState.camera.x, y - gameState.camera.y, radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        function drawText(text, x, y, color = 'white', size = 12) {
+            ctx.fillStyle = color;
+            ctx.font = `${size}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.fillText(text, x - gameState.camera.x, y - gameState.camera.y);
+        }
+
+        // ゲーム描画
+        function render() {
+            // 背景クリア
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 背景グラデーション
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            gradient.addColorStop(0, '#87CEEB');
+            gradient.addColorStop(0.6, '#98FB98');
+            gradient.addColorStop(1, '#8B4513');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 地面
+            drawRect(-1000, 500, 20000, 200, '#654321');
+
+            // プラットフォーム描画
+            gameState.platforms.forEach(platform => {
+                drawRect(platform.x, platform.y, platform.width, platform.height, platform.color);
+                
+                // プラットフォームの境界
+                ctx.strokeStyle = '#333';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(platform.x - gameState.camera.x, platform.y - gameState.camera.y, 
+                             platform.width, platform.height);
+            });
+
+            // 障害物描画
+            gameState.obstacles.forEach(obstacle => {
+                if (obstacle.type === 'spike') {
+                    // トゲの描画
+                    ctx.fillStyle = obstacle.color;
+                    ctx.beginPath();
+                    for (let i = 0; i < obstacle.width; i += 10) {
+                        ctx.moveTo(obstacle.x + i - gameState.camera.x, obstacle.y + obstacle.height - gameState.camera.y);
+                        ctx.lineTo(obstacle.x + i + 5 - gameState.camera.x, obstacle.y - gameState.camera.y);
+                        ctx.lineTo(obstacle.x + i + 10 - gameState.camera.x, obstacle.y + obstacle.height - gameState.camera.y);
+                    }
+                    ctx.fill();
+                } else {
+                    drawRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height, obstacle.color);
+                }
+
+                if (obstacle.type === 'moving') {
+                    // 動く障害物にマーク
+                    drawCircle(obstacle.x + obstacle.width/2, obstacle.y - 10, 5, '#ffff00');
+                }
+            });
+
+            // コイン描画
+            gameState.coins.forEach(coin => {
+                if (!coin.collected) {
+                    const time = Date.now() * 0.005;
+                    const bounce = Math.sin(time + coin.x * 0.01) * 3;
+                    
+                    drawCircle(coin.x + coin.width/2, coin.y + coin.height/2 + bounce, 
+                             coin.width/2, coin.color);
+                    
+                    // キラキラ効果
+                    ctx.fillStyle = '#fff';
+                    ctx.font = '12px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('✨', coin.x + coin.width/2 - gameState.camera.x, 
+                               coin.y + bounce - gameState.camera.y);
+                }
+            });
+
+            // プレイヤー描画
+            Object.values(gameState.players).forEach(player => {
+                // プレイヤー本体
+                drawRect(player.x, player.y, player.width, player.height, player.color);
+                
+                // プレイヤー名
+                drawText(player.name, player.x + player.width/2, player.y - 10, 'white', 14);
+                
+                // 体力バー
+                const healthBarWidth = 40;
+                const healthPercent = player.health / 100;
+                drawRect(player.x - 5, player.y - 25, healthBarWidth, 5, '#333');
+                drawRect(player.x - 5, player.y - 25, healthBarWidth * healthPercent, 5, 
+                        healthPercent > 0.5 ? '#4CAF50' : healthPercent > 0.25 ? '#FF9800' : '#F44336');
+
+                // 自分のプレイヤーを強調
+                if (player.id === socket.id) {
+                    ctx.strokeStyle = '#ffff00';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(player.x - gameState.camera.x - 2, player.y - gameState.camera.y - 2, 
+                                 player.width + 4, player.height + 4);
+                }
+            });
+
+            // 雲の描画
+            const cloudPositions = [200, 600, 1200, 1800, 2500];
+            cloudPositions.forEach((cloudX, index) => {
+                const adjustedX = cloudX + Math.sin(Date.now() * 0.001 + index) * 20;
+                drawCircle(adjustedX, 100, 30, 'rgba(255,255,255,0.8)');
+                drawCircle(adjustedX + 20, 100, 25, 'rgba(255,255,255,0.8)');
+                drawCircle(adjustedX - 20, 100, 25, 'rgba(255,255,255,0.8)');
+            });
+        }
+
+        // ゲームループ
+        function gameLoop() {
+            updateCamera();
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ゲーム開始
+        gameLoop();
+
+        // エンターキーでログイン
+        document.getElementById('playerName').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                joinGame();
+            }
+        });
+    </script>
+</body>
+</html>
