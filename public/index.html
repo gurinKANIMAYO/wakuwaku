@@ -420,8 +420,20 @@
 
             // プレイヤー描画
             Object.values(gameState.players).forEach(player => {
-                // プレイヤー本体
-                drawRect(player.x, player.y, player.width, player.height, player.color);
+                // 無敵時間中は点滅効果
+                const isInvulnerable = player.invulnerable && Date.now() < player.invulnerable;
+                const shouldDraw = !isInvulnerable || Math.floor(Date.now() / 100) % 2 === 0;
+                
+                if (shouldDraw) {
+                    // プレイヤー本体
+                    drawRect(player.x, player.y, player.width, player.height, 
+                            isInvulnerable ? '#ffaaaa' : player.color);
+                } else {
+                    // 無敵時の半透明描画
+                    ctx.globalAlpha = 0.5;
+                    drawRect(player.x, player.y, player.width, player.height, player.color);
+                    ctx.globalAlpha = 1.0;
+                }
                 
                 // プレイヤー名
                 drawText(player.name, player.x + player.width/2, player.y - 10, 'white', 14);
